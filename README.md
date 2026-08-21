@@ -3,7 +3,8 @@
 Feature extraction for the CMU CERT Insider Threat Test Dataset (**r4.1–r6.2**), all temporal modes (**week, day, session, subsession**).
 
 A performance and reliability modernisation of the original extractor by Le, Zincir-Heywood and Heywood. **Feature semantics are unchanged** — same features, same names, same order, same labels. Only the machinery around them was rewritten. The original script cannot run on a current Python/pandas stack, offers no progress reporting, cannot resume after an interruption, always computes all four temporal modes even when one is wanted, and re-scans the same data repeatedly. On r6.2 (135M events, ~22 GB) this makes a single run impractical.
-
+In this update vesrion (v2.0.0), a full day-granularity extraction of CERT r4.2 (33M events, 1,000 users, 73 weeks) completes in well under two hours end-to-end on 8 workers, against the many to days the original requires for the same output.
+---
 <p align="left">
   <h4>Resume run with rich progress bar enabled :</h4>
   <img src="img/screenshot1.png" alt="CERT Feature Extraction" width="900"/>
@@ -13,7 +14,6 @@ A performance and reliability modernisation of the original extractor by Le, Zin
 </p>
 
 ---
-
 ## Update
 
 ### Correctness / compatibility
