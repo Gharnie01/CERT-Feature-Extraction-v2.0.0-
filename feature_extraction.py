@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-CERT Insider Threat Test Dataset -- Feature Extraction (v2.0.0)
+CERT Insider Threat Test Dataset -- Feature Extraction (modernised)
 ================================================================================
 
 Supported releases : r4.1, r4.2, r5.1, r5.2, r6.1, r6.2
@@ -267,9 +267,40 @@ class CheckpointDB:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.dataset = dataset
         self._conn = sqlite3.connect(str(self.path), timeout=60.0)
-        self._conn.execute("PRAGMA journal_mode=WAL")   # survives hard kills
+
+        # WAL journalling needs a shared-memory (-shm) file backed by mmap.
+        # DrvFs/9p -- i.e. anything under /mnt/c on WSL -- does not support
+        # that, and SQLite can block indefinitely rather than fail cleanly.
+        # Fall back to rollback journalling there; it is slower per commit but
+        # the commit rate here is one row per partition, so it costs nothing.
+        if self._on_windows_mount():
+            self._conn.execute("PRAGMA journal_mode=DELETE")
+            log.debug("checkpoint DB on a Windows mount -- WAL disabled")
+        else:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=30000")
         self._conn.executescript(self.SCHEMA)
         self._conn.commit()
+
+    def _on_windows_mount(self) -> bool:
+        """True if the DB lives on a DrvFs/9p mount (WSL's /mnt/<drive>)."""
+        try:
+            p = str(self.path.resolve())
+            if not p.startswith("/mnt/"):
+                return False
+            # /mnt/c/... is a Windows drive; /mnt/data on a native disk is not.
+            with open("/proc/mounts") as fh:
+                for line in fh:
+                    parts = line.split()
+                    if len(parts) > 2 and p.startswith(parts[1]) \
+                            and parts[2] in ("9p", "drvfs", "drvfs2", "cifs"):
+                        return True
+            # /proc/mounts unavailable or inconclusive: assume the worst for
+            # anything under /mnt/<single letter>/.
+            seg = p.split("/")
+            return len(seg) > 2 and len(seg[2]) == 1
+        except Exception:
+            return False
 
     def completed(self, stage: str, mode: str) -> set:
         cur = self._conn.execute(
@@ -1722,12 +1753,18 @@ def consolidate(week_range, mode, dname, tmp_dir: Path, out_dir: Path,
 # ── Benchmark ─────────────────────────────────────────────────────────────────
 
 def run_benchmark(dname, users, ul, uf_dict, list_uf, num_dir, tmp_dir,
-                  subsession_mode, worker_grid):
+                  subsession_mode, worker_grid, backend="loky", timeout=1800,
+                  n_partitions=12):
     """
     Time Step 4 on small / median / large partitions across worker counts.
 
     Primary metric is wall-clock to produce valid output -- not CPU utilisation,
     which rewards oversubscription that does not actually finish sooner.
+
+    Each trial is bounded by `timeout`. Without it, a worker that dies mid-task
+    leaves joblib waiting in _retrieve indefinitely, and the benchmark -- whose
+    entire purpose is to be a cheap probe before a long run -- becomes the thing
+    that hangs. A trial that times out is recorded as such and the grid moves on.
     """
     sizes = []
     for p in sorted(Path(num_dir).glob("*_num.pickle")):
@@ -1736,22 +1773,44 @@ def run_benchmark(dname, users, ul, uf_dict, list_uf, num_dir, tmp_dir,
         log.error("benchmark: no Step 3 output found; run Step 3 first")
         return []
     sizes.sort()
-    picks = [sizes[0][1], sizes[len(sizes) // 2][1], sizes[-1][1]]
-    log.info("benchmark partitions (small/median/large): %s", picks)
+
+    # Sample evenly across the size-sorted partitions, so the set spans the
+    # small/median/large range rather than clustering.
+    #
+    # The count matters: with fewer partitions than workers, every worker count
+    # above the partition count measures the same thing (one wave, bounded by
+    # the slowest partition) and the grid cannot discriminate. Default is
+    # tuned to give at least a couple of scheduling waves at typical settings.
+    n_pick = max(3, min(n_partitions, len(sizes)))
+    idx = np.linspace(0, len(sizes) - 1, n_pick).round().astype(int)
+    picks = [sizes[i][1] for i in sorted(set(idx.tolist()))]
+
+    log.info("benchmark: %d partitions (weeks %s)", len(picks), picks)
+    log.info("benchmark worker grid: %s  (timeout %ds per trial)",
+             worker_grid, timeout)
 
     results = []
     for nw in worker_grid:
+        log.info("  trial: workers=%d ...", nw)
         t0 = time.time()
-        Parallel(n_jobs=nw)(
-            delayed(to_csv)(i, 'day', dname, ul, uf_dict, list_uf,
-                            num_dir, tmp_dir, subsession_mode) for i in picks)
-        dt = time.time() - t0
-        results.append({"workers": nw, "seconds": round(dt, 2)})
-        log.info("  workers=%-3d  %.1fs", nw, dt)
+        try:
+            Parallel(n_jobs=nw, backend=backend, timeout=timeout)(
+                delayed(to_csv)(i, 'day', dname, ul, uf_dict, list_uf,
+                                num_dir, tmp_dir, subsession_mode) for i in picks)
+            dt = time.time() - t0
+            results.append({"workers": nw, "seconds": round(dt, 2)})
+            log.info("    workers=%-3d  %.1fs", nw, dt)
+        except Exception as exc:
+            log.error("    workers=%-3d  FAILED after %.1fs: %s",
+                      nw, time.time() - t0, type(exc).__name__)
+            results.append({"workers": nw, "seconds": None,
+                            "error": type(exc).__name__})
 
-    base = results[0]["seconds"]
-    for r in results:
-        r["speedup"] = round(base / r["seconds"], 2) if r["seconds"] else None
+    ok = [r for r in results if r["seconds"]]
+    if ok:
+        base = ok[0]["seconds"]
+        for r in results:
+            r["speedup"] = round(base / r["seconds"], 2) if r["seconds"] else None
     return results
 
 
@@ -1847,6 +1906,10 @@ notes
                    help="recompute everything, ignoring checkpoints")
     g.add_argument("--benchmark", action="store_true",
                    help="time Step 4 across worker counts, then exit")
+    g.add_argument("--benchmark-weeks", type=int, default=12, metavar="N",
+                   help="partitions per benchmark trial (default: 12). Must "
+                        "exceed the largest worker count for the grid to "
+                        "discriminate between settings.")
 
     g = p.add_argument_group("paths")
     g.add_argument("--output-dir", type=Path, default=None,
@@ -2022,16 +2085,30 @@ def main(argv=None):
                     progress.advance("step3", 1,
                                      rate_hint=f"{rows:,} rows" if rows else "failed")
 
+            log.info("Step 3: all partitions consumed, tearing down workers")
+
             s3 = ckpt.summary("step3", "-")
             log.info("Step 3 summary: %s", s3)
             stage_times["step3_numeric"] = round(time.time() - t0, 1)
+            log.info("Step 3 done in %.1f min", stage_times["step3_numeric"] / 60)
 
             # ── Benchmark short-circuit ───────────────────────────────────────
+            log.info("building user feature dictionaries")
             (ul, uf_dict, list_uf) = get_u_features_dicts(users, data=dname)
+            log.info("user feature dictionaries ready")
             if args.benchmark:
-                grid = sorted({1, 4, workers, workers * 2})
+                # Never exceed the logical CPU count. Spawning 2x cores of
+                # interpreters to run three tasks measures process startup, not
+                # throughput, and is where this previously hung.
+                ncpu = os.cpu_count() or workers
+                grid = sorted({g for g in (4, 8, workers, ncpu) if 1 <= g <= ncpu})
                 res = run_benchmark(dname, users, ul, uf_dict, list_uf,
-                                    num_dir, tmp_dir, subsession_mode, grid)
+                                    num_dir, tmp_dir, subsession_mode, grid,
+                                    backend=args.backend,
+                                    n_partitions=args.benchmark_weeks)
+                out = out_dir / f"benchmark_{dname}.json"
+                out.write_text(json.dumps(res, indent=2))
+                log.info("benchmark written to %s", out)
                 print(json.dumps(res, indent=2))
                 return 0
 

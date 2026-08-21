@@ -1,12 +1,16 @@
-<<<<<<< HEAD
-# CERT-Feature-Extraction-v2.0.0
-Feature extraction for the CMU CERT Insider Threat Test Dataset (r4.1–r6.2), all temporal modes (week, day, session, subsession).
-=======
 # CERT Feature Extraction (v2.0.0)
 
 Feature extraction for the CMU CERT Insider Threat Test Dataset (**r4.1–r6.2**), all temporal modes (**week, day, session, subsession**).
 
 A performance and reliability modernisation of the original extractor by Le, Zincir-Heywood and Heywood. **Feature semantics are unchanged** — same features, same names, same order, same labels. Only the machinery around them was rewritten. The original script cannot run on a current Python/pandas stack, offers no progress reporting, cannot resume after an interruption, always computes all four temporal modes even when one is wanted, and re-scans the same data repeatedly. On r6.2 (135M events, ~22 GB) this makes a single run impractical.
+
+<p align="left">
+  <h4>Initial run with rich progress bar enabled :</h4>
+  <img src="img/screenshot1.png" alt="CERT Feature Extraction" width="900"/>
+  <br>
+  <h4>Resumed run with rich progress bar disabled (i.e, --no-rich specified) :</h4>
+  <img src="img/screenshot2.png" alt="CERT Feature Extraction" width="900"/>
+</p>
 
 ---
 
@@ -107,61 +111,8 @@ logging:
   --no-rich             plain log-line progress instead of a live bar
   --quiet
   --version             show program's version number and exit
-```
-**example usage :**
-```bash
 
-#run from inside the dataset folder (release inferred from folder name):
-    cd /data/r4.2 && python feature_extraction.py --mode day --workers 8
-
-#or specify everything explicitly, from anywhere:
-    python feature_extraction.py \
-        --dataset r4.2 \
-        --data-dir   /data/cert/r4.2 \
-        --output-dir /data/cert/extracted/r4.2 \
-        --mode day --workers 8
-
-#keep intermediates off the dataset volume (e.g. on a fast local disk):
-    python feature_extraction.py \
-        --dataset r5.2 --data-dir /mnt/slow/r5.2 \
-        --output-dir /mnt/fast/extracted/r5.2 \
-        --intermediate-dir /mnt/fast/scratch/r5.2 \
-        --mode day --workers 8
-
-#resume after an interruption -- same command, completed weeks are skipped:
-    python feature_extraction.py --data-dir /data/cert/r4.2 --mode day --resume
-
-#everything the original produced: week, day, session, subsession:
-    python feature_extraction.py --data-dir /data/cert/r4.2 --mode all --workers 8
-
-#measure worker scaling before committing to a long run:
-    python feature_extraction.py --data-dir /data/cert/r6.2 --mode day --benchmark
-
-paths
------
-  --data-dir          input: a decompressed CERT release folder
-  --dataset           release name; inferred from the folder name if omitted
-  --output-dir        final CSVs        (default: <data-dir>/ExtractedData)
-  --intermediate-dir  scratch parent    (default: <data-dir>)
-  --checkpoint-dir    resume database   (default: <data-dir>/checkpoints)
-
-  Relative paths are resolved against your current shell directory, not the
-  dataset folder. Keep --intermediate-dir and --checkpoint-dir per release;
-  they must not be shared between r4.2 and r5.2.
-
-outputs
--------
-  <output-dir>/<mode><dataset>.csv            e.g. dayr4.2.csv
-  <output-dir>/session{nact,time}<N><ds>.csv  subsessions
-  <output-dir>/run_metadata.json
-
-notes
------
-  `insider` is the target label: 0 = normal, >0 = threat scenario number.
-  It is never removed by --drop-informational.
-  --mode all always retains informational fields, so that `all` represents the
-  complete extraction rather than a modelling-specific subset.
-
+see example(s) usage @: python feature_extraction.py --help
 ```
 
 ---
@@ -229,4 +180,3 @@ If you use this modernised implementation, please additionally cite it:
 ## Licence
 
 MIT, following the original repository. The CERT dataset carries its own copyright and licence terms — see the dataset distribution.
->>>>>>> ba7f28a (complete pipeline with requirement packages)
