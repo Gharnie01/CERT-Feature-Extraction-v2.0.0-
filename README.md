@@ -5,7 +5,7 @@ Feature extraction for the CMU CERT Insider Threat Test Dataset (**r4.1–r6.2**
 A performance and reliability modernisation of the original extractor by Le, Zincir-Heywood and Heywood. **Feature semantics are unchanged** — same features, same names, same order, same labels. Only the machinery around them was rewritten. The original script cannot run on a current Python/pandas stack, offers no progress reporting, cannot resume after an interruption, always computes all four temporal modes even when one is wanted, and re-scans the same data repeatedly. On r6.2 (135M events, ~22 GB) this makes a single run impractical.
 
 <p align="left">
-  <h4>Initial run with rich progress bar enabled :</h4>
+  <h4>Resume run with rich progress bar enabled :</h4>
   <img src="img/screenshot1.png" alt="CERT Feature Extraction" width="900"/>
   <br>
   <h4>Resumed run with rich progress bar disabled (i.e, --no-rich specified) :</h4>
@@ -110,7 +110,7 @@ logging:
   --log-file LOG_FILE
   --no-rich             plain log-line progress instead of a live bar
   --quiet
-  --version             show program's version number and exit
+  --version             show program version number and exit
 
 see example(s) usage @: python feature_extraction.py --help
 ```
